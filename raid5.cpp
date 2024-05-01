@@ -180,33 +180,22 @@ class CRaidVolume
             char* recover = new char[SECTOR_SIZE * granurity];
             int sector_curr = config_size;
             int size_of_drive = m_Dev.m_Sectors;
+
+            char** buffers;
+            initBuffers(buffers, granurity);
             
             while(sector_curr < size_of_drive){
                 if(size_of_drive - sector_curr < granurity){
                     granurity = size_of_drive - sector_curr;
                 }
 
-                memset(recover, 0, SECTOR_SIZE * granurity);
-                for(int i = 0; i < m_Dev.m_Devices; i++){ 
-                    if(i == degraded_disk) continue;
-                    int ret = m_Dev.m_Read(i, sector_curr, buffer, granurity);
-                    if(ret != granurity){
-                        m_status = RAID_FAILED;
-                        delete [] buffer;
-                        delete [] recover;
-                        return m_status;
-                    }
-                    for(int i = 0; i < granurity * SECTOR_SIZE; i++){
-                        recover[i] ^= buffer[i];
-                    }
+                if(readDiskData(buffers, sector_curr, granurity) == false){
+                    deleteBuffers(buffers);
+					return m_status;
                 }
-                int ret = m_Dev.m_Write(degraded_disk, sector_curr, recover, granurity);
-                if(ret != granurity){
-                    m_status = RAID_DEGRADED;
-                    delete [] buffer;
-                    delete [] recover;
-                    return m_status;
-                }
+
+                fixDatas(buffers, granurity);
+                writeDiskData(buffers, sector_curr, granurity);
                 sector_curr += granurity;
             }
 

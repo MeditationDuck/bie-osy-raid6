@@ -6,9 +6,12 @@
 #include <cstring>
 #include <cstdint>
 #include <cassert>
+#include <stdexcept>
+#include <iostream>
+#include <iomanip>
 using namespace std;
 
-constexpr int                          SECTOR_SIZE                             =             512;
+constexpr int                          SECTOR_SIZE                             =              32;
 constexpr int                          MAX_RAID_DEVICES                        =              16;
 constexpr int                          MAX_DEVICE_SECTORS                      = 1024 * 1024 * 2;
 constexpr int                          MIN_DEVICE_SECTORS                      =    1 * 1024 * 2;
@@ -179,7 +182,7 @@ class CRaidVolume
 				if(size_of_drive - sector_curr < granurity){
 					granurity = size_of_drive - sector_curr;
 				}
-				if(readDiskData(buffers, sector_curr, granurity)){
+				if(readDiskData(buffers, sector_curr, granurity)== false){
 					deleteBuffers(buffers);
 					return m_status;
 				}
@@ -215,8 +218,12 @@ class CRaidVolume
 			initBuffers(buffers, row_size);
 			if(readDiskData(buffers, startingSector, row_size) == false){
                 deleteBuffers(buffers);
+				// printf("failllll\n");
                 return false;
 			}
+
+			// printf("status: %d,disks:  %d, %d\n", m_status, degraded_disk, degraded_disk2);
+
 			fixDatas(buffers, startingSector, row_size);
 
 			int data_index = 0;
@@ -358,6 +365,7 @@ class CRaidVolume
 		for(int j = 0; j < m_Dev.m_Devices; j++){
 			int ret = m_Dev.m_Read(j, startingSector, buffers[j], row_size);
 			if(ret != row_size){
+				// printf("read differnet!!\n");
 				if(m_status == RAID_DEGRADED){
 					if(degraded_disk != j && degraded_disk2 != -1 && degraded_disk2 !=j){
 						m_status = RAID_FAILED;
@@ -400,17 +408,19 @@ class CRaidVolume
 		if(m_status == RAID_DEGRADED){ //  degraded_disk available
 			char* parity_xor = new char[SECTOR_SIZE];
 			if(degraded_disk2 == -1){
-				
+				// printf("mut be hehe %d %d\n", startingSector, row_size);
 				for(int i = 0; i < row_size; i++){
 					int parity_p = (startingSector + i) % m_Dev.m_Devices;
 					int parity_q = (startingSector + i + 1) % m_Dev.m_Devices;
+					// printf("pq: %d, %d\n", parity_p, parity_q);
 					if(degraded_disk == parity_p || degraded_disk == parity_q){
 						// about this row degraded disk is parity, data does not effected.
+						// printf("expected two line\n");
 						continue;
 					}
 					memset(parity_xor, 0, SECTOR_SIZE);
 					for(int j = 0; j < m_Dev.m_Devices; j++){
-						if(j == degraded_disk) continue;
+						if(j == degraded_disk || j == parity_q) continue;
 						for(int k = 0; k < SECTOR_SIZE; k++){
 							parity_xor[k] ^= buffers[j][i* SECTOR_SIZE + k];
 						}
@@ -603,6 +613,7 @@ TBlkDev                                createDisks                             (
 
   for ( int i = 0; i < RAID_DEVICES; i ++ )
   {
+	printf("/tmp/%04d\n", i );
     snprintf ( fn, sizeof ( fn ), "/tmp/%04d", i );
     g_Fp[i] = fopen ( fn, "w+b" );
     if ( ! g_Fp[i] )
@@ -656,86 +667,699 @@ TBlkDev                                openDisks                               (
   res . m_Write   = diskWrite;
   return res;
 }
-//-------------------------------------------------------------------------------------------------
-void                                   test1                                   ()
+
+void degradeDisk(int diskIndex, bool deleteFile = true)
 {
-  /* create the disks before we use them
-   */
-  TBlkDev  dev = createDisks ();
-  /* The disks are ready at this moment. Your RAID-related functions may be executed,
-   * the disk backend is ready.
-   *
-   * First, try to create the RAID:
-   */
+    if (diskIndex < 0 || diskIndex >= RAID_DEVICES) {
+        throw std::runtime_error("Disk index out of range");
+    }
 
-  assert ( CRaidVolume::create ( dev ) );
+    if (g_Fp[diskIndex] == nullptr) {
+        throw std::runtime_error("Disk already degraded or not initialized");
+    }
+    fclose(g_Fp[diskIndex]);
+    g_Fp[diskIndex] = nullptr;
+
+    if (deleteFile) {
+        char fn[100];
+        snprintf(fn, sizeof(fn), "/tmp/%04d", diskIndex);
+        if (std::remove(fn) != 0) {
+            throw std::runtime_error("Failed to delete disk file");
+        }
+    }
+}
+
+void createandputDisk(int diskIndex){
+    char       buffer[SECTOR_SIZE];
+    memset    ( buffer, 0, sizeof ( buffer ) );
+
+    char       fn[100];
+    if (diskIndex < 0 || diskIndex >= RAID_DEVICES) {
+        throw std::runtime_error("Disk index out of range");
+    }
+
+    if (g_Fp[diskIndex] != nullptr) {
+        throw std::runtime_error("Disk already exist");
+    }
+
+    snprintf( fn, sizeof ( fn ), "/tmp/%04d", diskIndex );
+    g_Fp[diskIndex] = fopen(fn, "w+b");
+    if (!g_Fp[diskIndex]){
+        doneDisks();
+        throw std::runtime_error ( "Raw storage create error" );
+    }
+
+    for ( int j = 0; j < DISK_SECTORS; j ++ )
+    if ( fwrite ( buffer, sizeof ( buffer ), 1, g_Fp[diskIndex] ) != 1 )
+    {
+        doneDisks ();
+        throw std::runtime_error ( "Raw storage create error" );
+    }
+
+}
+//-------------------------------------------------------------------------------------------------
+// void                                   test1                                   ()
+// {
+//   /* create the disks before we use them
+//    */
+//   TBlkDev  dev = createDisks ();
+//   /* The disks are ready at this moment. Your RAID-related functions may be executed,
+//    * the disk backend is ready.
+//    *
+//    * First, try to create the RAID:
+//    */
+
+//   assert ( CRaidVolume::create ( dev ) );
 
 
-  /* start RAID volume */
+//   /* start RAID volume */
 
-  CRaidVolume vol;
+//   CRaidVolume vol;
 
-  assert ( vol . start ( dev ) == RAID_OK );
-  assert ( vol . status () == RAID_OK );
+//   assert ( vol . start ( dev ) == RAID_OK );
+//   assert ( vol . status () == RAID_OK );
 
-  /* your raid device shall be up.
-   * try to read and write all RAID sectors:
-   */
+//   /* your raid device shall be up.
+//    * try to read and write all RAID sectors:
+//    */
 
-  for ( int i = 0; i < vol . size (); i ++ )
-  {
+//   for ( int i = 0; i < vol . size (); i ++ )
+//   {
+//     char buffer [SECTOR_SIZE];
+
+//     assert ( vol . read ( i, buffer, 1 ) );
+//     assert ( vol . write ( i, buffer, 1 ) );
+//   }
+
+//   /* Extensive testing of your RAID implementation ...
+//    */
+
+
+//   /* Stop the raid device ...
+//    */
+//   assert ( vol . stop () == RAID_STOPPED );
+//   assert ( vol . status () == RAID_STOPPED );
+
+//   /* ... and the underlying disks.
+//    */
+
+//   doneDisks ();
+
+//   printf("test1 done\n");
+// }
+
+void test0 (){
+    printf("initialization and finalization test\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+//-------------------------------------------------------------------------------------------------
+// void                                   test2                                   ()
+// {
+//   /* The RAID as well as disks are stopped. It corresponds i.e. to the
+//    * restart of a real computer.
+//    *
+//    * after the restart, we will not create the disks, nor create RAID (we do not
+//    * want to destroy the content). Instead, we will only open/start the devices:
+//    */
+
+//   TBlkDev dev = openDisks ();
+//   CRaidVolume vol;
+
+//   assert ( vol . start ( dev ) == RAID_OK );
+
+
+//   /* some I/O: RaidRead/RaidWrite
+//    */
+
+//   vol . stop ();
+//   doneDisks ();
+
+//    printf("test2 done\n");
+// }
+//-------------------------------------------------------------------------------------------------
+
+
+void printBuffer(const char* label, const char* buffer, int size) {
+    std::cout << label << ":\n";
+    for (int i = 0; i < size; ++i) {
+        if (i % SECTOR_SIZE == 0 && i != 0) {
+            std::cout << "\n";
+        }
+        std::cout << std::hex << std::setfill('0') << std::setw(2) << (buffer[i] & 0xFF) << " ";
+    }
+    std::cout << std::dec << "\n";
+}
+
+
+void test_read (){
+    printf("read one time\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
     char buffer [SECTOR_SIZE];
+    assert ( vol . read ( 0, buffer, 1 ) );
 
-    assert ( vol . read ( i, buffer, 1 ) );
-    assert ( vol . write ( i, buffer, 1 ) );
-  }
-
-  /* Extensive testing of your RAID implementation ...
-   */
-
-
-  /* Stop the raid device ...
-   */
-  assert ( vol . stop () == RAID_STOPPED );
-  assert ( vol . status () == RAID_STOPPED );
-
-  /* ... and the underlying disks.
-   */
-
-  doneDisks ();
-
-  printf("test1 done\n");
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
 }
-//-------------------------------------------------------------------------------------------------
-void                                   test2                                   ()
+
+void test_read_error (){
+    printf("read error \n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    char* buffer = new char[SECTOR_SIZE + vol.size()+10];
+    assert ( vol . status () == RAID_OK );
+    assert (!vol . read ( 0, buffer, vol.size()+1));
+    assert (!vol . read ( 5, buffer, vol.size()+5));
+    assert ( vol . status () == RAID_OK );
+
+    delete [] buffer;
+
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+void test1(){
+    printf("read value is zero\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    for ( int i = 0; i < vol.size(); i++ ){
+        char buffer [SECTOR_SIZE];
+        char reference_buffer[SECTOR_SIZE];
+        assert ( vol . read ( i, buffer, 1 ) );
+        memcpy(reference_buffer, buffer, SECTOR_SIZE);
+        assert(memcmp(buffer, reference_buffer, SECTOR_SIZE) == 0); 
+    }
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+void                                   test2                                ()
 {
-  /* The RAID as well as disks are stopped. It corresponds i.e. to the
-   * restart of a real computer.
-   *
-   * after the restart, we will not create the disks, nor create RAID (we do not
-   * want to destroy the content). Instead, we will only open/start the devices:
-   */
+    printf("content correctness 1 sector\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 1;
+    for( int i = 0; i < vol.size(); i++){
+        // printf("%d\n", i);
+        assert(vol.status() == RAID_OK);
+        char buffer[SECTOR_SIZE*size];
+        char reference_buffer[SECTOR_SIZE*size];
 
-  TBlkDev dev = openDisks ();
-  CRaidVolume vol;
+        for (int j = 0; j < SECTOR_SIZE*size; j++) {
+            buffer[j] = rand() % 256;
+        }
 
-  assert ( vol . start ( dev ) == RAID_OK );
+        memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+        assert(vol.write( i, buffer, size));
+        assert(vol.status() == RAID_OK);
 
-
-  /* some I/O: RaidRead/RaidWrite
-   */
-
-  vol . stop ();
-  doneDisks ();
-
-   printf("test2 done\n");
+        memset(buffer, 0, SECTOR_SIZE*size);
+        assert(vol.read( i, buffer, size));
+        assert(vol.status() == RAID_OK);
+        assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    }
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
 }
-//-------------------------------------------------------------------------------------------------
+
+void test3 ()
+{
+    printf("content correctness n sector\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    for(int size = 2; size < 1000; size *= size ){
+        // printf("%d\n", size);
+        for( int i = 0; i < 200 - (size-1); i++){
+            assert(vol.status() == RAID_OK);
+            char buffer[SECTOR_SIZE*size];
+            char reference_buffer[SECTOR_SIZE*size];
+
+            for (int j = 0; j < SECTOR_SIZE*size; j++) {
+                buffer[j] = rand() % 256;
+            }
+
+            memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+            assert(vol.write( i, buffer, size));
+            assert(vol.status() == RAID_OK);
+            memset(buffer, 0, SECTOR_SIZE*size);
+            assert(vol.read( i, buffer, size));
+            assert(vol.status() == RAID_OK);
+            assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+        }
+
+    }
+    
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+
+
+void  test_multi_write ()
+{
+    printf("multi read write \n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 1;
+    for( int i = 0; i < 1; i++){
+        assert(vol.status() == RAID_OK);
+        char buffer[SECTOR_SIZE*size];
+        char buffer2[SECTOR_SIZE*size];
+        char reference_buffer[SECTOR_SIZE*size];
+        char reference_buffer2[SECTOR_SIZE*size];
+
+        for (int j = 0; j < SECTOR_SIZE*size; j++) {
+            buffer[j] = rand() % 256;
+            buffer2[j] = rand() % 256;
+        }
+
+        memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+        memcpy(reference_buffer2, buffer2, SECTOR_SIZE*size);
+
+
+        assert(vol.write( i, buffer, size));
+        assert(vol.status() == RAID_OK);
+
+    
+        assert(vol.write(i+size, buffer2, size));
+        assert(vol.status() == RAID_OK);
+
+        memset(buffer, 0, SECTOR_SIZE*size);
+        assert(vol.read( i, buffer, size));
+        assert(vol.status() == RAID_OK);
+
+        memset(buffer2, 0, SECTOR_SIZE*size);
+        assert(vol.read(i+size, buffer2, size));
+        assert(vol.status() == RAID_OK);
+
+
+
+        assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+        // print content of buffer and reference_buffer in hex
+        
+        
+        assert(memcmp(buffer2, reference_buffer2, SECTOR_SIZE*size) == 0);
+    }
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+void test4_1 ()
+{
+    printf("test4 read degrade\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 5;
+   
+    assert(vol.status() == RAID_OK);
+    char buffer[SECTOR_SIZE*size];
+    char reference_buffer[SECTOR_SIZE*size];
+    for (int j = 0; j < SECTOR_SIZE*size; j++) {
+        buffer[j] = rand() % 256;
+    }
+    memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+    assert(vol.write( 1, buffer, size));
+    assert(vol.status() == RAID_OK);
+    memset(buffer, 0, SECTOR_SIZE*size);
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_OK);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    degradeDisk(2);
+	 //read failed here.
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+   
+	// print buffer and reference_buffer.
+
+	printBuffer("Buffer after degrade", buffer, SECTOR_SIZE * size);
+	printBuffer("Buffer after degrade", reference_buffer, SECTOR_SIZE * size);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    assert(vol.status() == RAID_DEGRADED);
+
+    assert( vol . stop () == RAID_STOPPED );
+    assert( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+void test4 ()
+{
+    printf("test4 read degrade\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 8;
+   
+    assert(vol.status() == RAID_OK);
+    char buffer[SECTOR_SIZE*size];
+    char reference_buffer[SECTOR_SIZE*size];
+    for (int j = 0; j < SECTOR_SIZE*size; j++) {
+        buffer[j] = rand() % 256;
+    }
+    memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+    assert(vol.write( 1, buffer, size));
+    assert(vol.status() == RAID_OK);
+    memset(buffer, 0, SECTOR_SIZE*size);
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_OK);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    degradeDisk(2);
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+    //read failed here.
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    assert(vol.status() == RAID_DEGRADED);
+
+    assert( vol . stop () == RAID_STOPPED );
+    assert( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+void test5(){
+    printf("write degrade\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 8;
+   
+    
+    char buffer[SECTOR_SIZE*size];
+    char reference_buffer[SECTOR_SIZE*size];
+    for (int j = 0; j < SECTOR_SIZE*size; j++) {
+        buffer[j] = rand() % 256;
+    }
+
+    assert(vol.status() == RAID_OK);
+    memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+    degradeDisk(2);
+    assert(vol.write( 1, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+    memset(buffer, 0, SECTOR_SIZE*size);
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    
+
+    assert( vol . stop () == RAID_STOPPED );
+    assert( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+void  test_resync ()
+{
+    printf("est_resync \n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 1;
+    for( int i = 0; i < 20; i++, size *=size){
+        assert(vol.status() == RAID_OK);
+        char buffer[SECTOR_SIZE*size];
+        char buffer2[SECTOR_SIZE*size];
+        char reference_buffer[SECTOR_SIZE*size];
+        char reference_buffer2[SECTOR_SIZE*size];
+
+        for (int j = 0; j < SECTOR_SIZE*size; j++) {
+            buffer[j] = rand() % 256;
+            buffer2[j] = rand() % 256;
+        }
+        memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+        memcpy(reference_buffer2, buffer2, SECTOR_SIZE*size);
+
+        assert(vol.write( i, buffer, size));
+        assert(vol.status() == RAID_OK);
+    
+        assert(vol.write(i+size, buffer2, size));
+        assert(vol.status() == RAID_OK);
+
+        
+        degradeDisk(2);
+        memset(buffer, 0, SECTOR_SIZE*size);
+        assert(vol.read( i, buffer, size));
+        assert(vol.status() == RAID_DEGRADED);
+
+        memset(buffer2, 0, SECTOR_SIZE*size);
+        assert(vol.read(i+size, buffer2, size));
+        assert(vol.status() == RAID_DEGRADED);
+
+
+        assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+        assert(memcmp(buffer2, reference_buffer2, SECTOR_SIZE*size) == 0);
+
+        createandputDisk(2);
+        int ret = vol.resync();
+        // printf("%d\n", ret);
+        assert(ret == RAID_OK);
+
+        memset(buffer, 0, SECTOR_SIZE*size);
+        assert(vol.read( i, buffer, size));
+        assert(vol.status() == RAID_OK);
+        memset(buffer2, 0, SECTOR_SIZE*size);
+        assert(vol.read(i+size, buffer2, size));
+        assert(vol.status() == RAID_OK);
+
+
+        assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+        assert(memcmp(buffer2, reference_buffer2, SECTOR_SIZE*size) == 0);
+
+    }
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+void  test_resync_whole ()
+{
+    printf("test_resync_whole \n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 100;
+    // printf("%d\n", size);
+
+    assert(vol.status() == RAID_OK);
+    char buffer[SECTOR_SIZE*size];
+    char reference_buffer[SECTOR_SIZE*size];
+   
+
+    for (int j = 0; j < SECTOR_SIZE*size; j++) {
+        buffer[j] = rand() % 256;
+    }
+    memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+
+    assert(vol.write( vol.size()-size, buffer, size));
+    assert(vol.status() == RAID_OK);
+
+    memset(buffer, 0, SECTOR_SIZE*size);
+
+    degradeDisk(3);
+    assert(vol.read(vol.size()-size, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+   
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+
+    createandputDisk(3);
+
+    int ret = vol.resync();
+    // printf("%d\n", ret);
+
+    assert(ret == RAID_OK);
+    memset(buffer, 0, SECTOR_SIZE*size);
+
+    assert(vol.read(vol.size()-size, buffer, size));
+    assert(vol.status() == RAID_OK);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+void  test_offline_replace()
+{
+    printf("test_offline_replace \n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 100;
+    // printf("%d\n", size);
+
+    assert(vol.status() == RAID_OK);
+    char buffer[SECTOR_SIZE*size];
+    char reference_buffer[SECTOR_SIZE*size];
+   
+
+    for (int j = 0; j < SECTOR_SIZE*size; j++) {
+        buffer[j] = rand() % 256;
+    }
+    memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+
+    assert(vol.write( vol.size()-size, buffer, size));
+    assert(vol.status() == RAID_OK);
+
+    memset(buffer, 0, SECTOR_SIZE*size);
+
+    degradeDisk(3);
+    assert(vol.read(vol.size()-size, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+
+    assert ( vol . stop () == RAID_STOPPED );
+    assert ( vol . status () == RAID_STOPPED );
+
+    CRaidVolume vol2;
+
+    assert ( vol2 . start ( dev ) == RAID_DEGRADED);
+    assert ( vol2 . status () == RAID_DEGRADED);
+
+    createandputDisk(3);
+
+    int ret = vol2.resync();
+    printf("%d\n", ret);
+
+    assert(ret == RAID_OK);
+    memset(buffer, 0, SECTOR_SIZE*size);
+
+    assert(vol2.read(vol2.size()-size, buffer, size));
+    assert(vol2.status() == RAID_OK);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+
+    assert ( vol2. stop () == RAID_STOPPED );
+    assert ( vol2 . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+void test_two_disk_fail()
+{
+    printf("test4 read degrade\n");
+    TBlkDev  dev = createDisks ();
+    assert ( CRaidVolume::create ( dev ) );
+    CRaidVolume vol;
+    assert ( vol . start ( dev ) == RAID_OK );
+    assert ( vol . status () == RAID_OK );
+    int size = 6;
+   
+    assert(vol.status() == RAID_OK);
+    char buffer[SECTOR_SIZE*size];
+    char reference_buffer[SECTOR_SIZE*size];
+    for (int j = 0; j < SECTOR_SIZE*size; j++) {
+        buffer[j] = rand() % 256;
+    }
+    memcpy(reference_buffer, buffer, SECTOR_SIZE*size);
+    assert(vol.write( 1, buffer, size));
+    assert(vol.status() == RAID_OK);
+    memset(buffer, 0, SECTOR_SIZE*size);
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_OK);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    degradeDisk(2);
+	 //read failed here.
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+   
+	// print buffer and reference_buffer.
+
+	// printBuffer("Buffer after degrade", buffer, SECTOR_SIZE * size);
+	// printBuffer("Buffer after degrade", reference_buffer, SECTOR_SIZE * size);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    assert(vol.status() == RAID_DEGRADED);
+
+	degradeDisk(1);
+	//read failed here.
+    assert(vol.read( 1, buffer, size));
+    assert(vol.status() == RAID_DEGRADED);
+
+	printBuffer("Buffer after degrade", buffer, SECTOR_SIZE * size);
+	printBuffer("Buffer after degrade", reference_buffer, SECTOR_SIZE * size);
+
+    assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
+    assert(vol.status() == RAID_DEGRADED);
+
+    assert( vol . stop () == RAID_STOPPED );
+    assert( vol . status () == RAID_STOPPED );
+    doneDisks ();
+}
+
+
+
+
+
+
 int                                    main                                    ()
 {
-  test1 ();
-  test2 ();
-  return EXIT_SUCCESS;
+	// test0();
+    // test_read();
+    // test_read_error();
+    // test1 ();
+    // test2 ();
+    // test_multi_write();
+    // test3();
+    // test4_1();
+	// test4();
+    // test5();
+	// test_resync();
+    // test_resync_whole();
+    // test_offline_replace();
+	test_two_disk_fail();
+	return EXIT_SUCCESS;
 }
 
 #endif /* __PROGTEST__ */
