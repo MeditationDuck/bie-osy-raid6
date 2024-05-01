@@ -31,6 +31,10 @@ static unsigned char gf_inv[256] = {
 		0x5b, 0x23, 0x38, 0x34, 0x68, 0x46, 0x03, 0x8c, 0xdd, 0x9c, 0x7d, 0xa0, 0xcd, 0x1a, 0x41, 0x1c
 	};
 
+static unsigned char gf_coeff[] = {
+		1, 2, 4, 8, 16, 32, 64, 128, 27, 54, 108, 216, 171, 77, 154, 47, 94, 188, 99, 198, 151, 53, 106, 212, 179, 125, 250, 239, 197, 145, 57, 114, 228, 211, 189, 97, 194, 159, 37, 74, 148, 51, 102, 204, 131, 29, 58, 116, 232, 203, 141
+	};
+
 unsigned char mul(unsigned char a, unsigned char b) {
     unsigned char p = 0;
     for (int i = 0; i < 8; i++) {
@@ -70,12 +74,57 @@ void init_gf_coeffs() {
 }
 int main() {
     // calcTest();
-    init_gf_coeffs();
-   // Global or static
-    printf("printf(");
-    for(int i = 0; i < 256; i++){
-        printf("%d, ", gf_coeffs[i]);
-    }
+//     init_gf_coeffs();
+//    // Global or static
+//     printf("printf(");
+//     for(int i = 0; i < 256; i++){
+//         printf("%d, ", gf_coeffs[i]);
+//     }
+
+    unsigned char d0, d1, d2;
+
+    d0= 0x3e;
+    d1= 0xec;
+    d2 = 0x04;
+
+    // printf("%02x\n", d0^mul(c1, d1)); 
+
+    unsigned char c0 = gf_coeff[0], c1 = gf_coeff[1], c2 = 4, c3=8, c4=16;
+
+    // there is 4 disk and data uses d0 and d1
+
+    unsigned char p, q;
+
+    p = d0^d1;
+    q = mul(d0, c0)^mul(d1,c1);
+
+    // let degrade d0 and d1
+
+    assert(d0 == (d1^p));
+    assert(mul(d1, c1) ==  (q^mul(d0, c0)));
+    assert(mul(d1, c1) ==  (q^mul(d1^p, c0)));
+    assert(mul(d1, c1) ==  (q^mul(d1, c0)^mul(p,c0)));       
+    assert((mul(d1, c1)^mul(d1, c0)) == (q^mul(p,c0)) ); 
+    assert(mul(d1, c1^c0) == (q^mul(p,c0)));
+    assert(d1 == mul(gf_inv[c1^c0],q^mul(p,c0))); // we could find d1 without using d1 and d0
+    assert(d0 == p^d1); // once we know 1 data we can just use xor.
+
+
+    printf("%02x\n", mul(gf_coeff[1], 0x67));
+
+   
+
+    unsigned char xored = 0xce^mul(gf_coeff[0], 0x00);
+     printf("new::%02x\n", xored);
+
+    xored = mul(gf_inv[gf_coeff[1]],xored);
+    parity_xor[k] = mul(gf_inv[gf_coeff[degraded_data_index]], parity_xor[k]);
+    printf("recover %02x\n", xored);
+
+    
+
+
+    
     printf("\n");
 
 }
