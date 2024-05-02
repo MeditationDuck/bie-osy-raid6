@@ -121,6 +121,8 @@ int main() {
     parity_xor[k] = mul(gf_inv[gf_coeff[degraded_data_index]], parity_xor[k]);
     printf("recover %02x\n", xored);
 
+
+
     
 
 

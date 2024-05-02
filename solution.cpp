@@ -520,20 +520,34 @@ class CRaidVolume
 						cx = gf_coeff[degraded_data_index];
 						cy = gf_coeff[degraded_data_index2];
 
-						
-
+						printf("cx: %d = 1 ", cx);
+						printf("cy: %d = 2\n", cy);
+						int data_index = 0;
 						for(int j = 0; j < m_Dev.m_Devices; j++){
 							if(j == degraded_disk || j == degraded_disk2){
+								data_index ++;
 								continue;
 							}
 							// other fine disks and parity.
-							for(int k = 0; k < SECTOR_SIZE; k++){
-								if(j == parity_q){
+							if(j == parity_q){
+								for(int k = 0; k < SECTOR_SIZE; k++){
 									parity_xor[k] ^= buffers[j][i* SECTOR_SIZE + k];
-									continue;
 								}
-								parity_xor[k] ^= mul(cy,  buffers[j][i* SECTOR_SIZE + k]);
+								continue;
 							}
+							if(j == parity_p){
+								for(int k = 0; k < SECTOR_SIZE; k++){
+									parity_xor[k] ^= mul(cy,  buffers[j][i* SECTOR_SIZE + k]);
+								}
+								continue;
+							}
+							// other available data
+							unsigned char cz = gf_coeff[data_index];
+							for(int k = 0; k < SECTOR_SIZE; k++){
+								parity_xor[k] ^= mul(cy,  buffers[j][i* SECTOR_SIZE + k]);
+								parity_xor[k] ^= mul(cz,  buffers[j][i* SECTOR_SIZE + k]);
+							}
+							data_index++;
 						}
 
 						unsigned char val = gf_inv[cx^cy];
@@ -576,7 +590,7 @@ class CRaidVolume
 };
 
 #ifndef __PROGTEST__
-constexpr int                          RAID_DEVICES                            = 4;
+constexpr int                          RAID_DEVICES                            = 5;
 constexpr int                          DISK_SECTORS                            = 8192;
 static FILE                          * g_Fp[RAID_DEVICES];
 
@@ -1291,7 +1305,7 @@ void test_two_disk_fail_dbg()
 	// vol.calcTest();
     assert ( vol . start ( dev ) == RAID_OK );
     assert ( vol . status () == RAID_OK );
-    int size = 100;
+    int size = 3;
 	int index = 0;
    
     char buffer[SECTOR_SIZE*size];
@@ -1306,14 +1320,14 @@ void test_two_disk_fail_dbg()
 
 	assert(vol.read( index, buffer, size));
     assert(vol.status() == RAID_OK);
-    degradeDisk(0);
-	degradeDisk(3);
+    degradeDisk(3);
+	degradeDisk(0);
 	 //read failed here.
     assert(vol.read( index, buffer, size));
     assert(vol.status() == RAID_DEGRADED);
 
-	printBuffer("Buffer after degrade", buffer, SECTOR_SIZE * size);
 	printBuffer("reference", reference_buffer, SECTOR_SIZE * size);
+	printBuffer("Buffer after degrade", buffer, SECTOR_SIZE * size);
 
     assert(memcmp(buffer, reference_buffer, SECTOR_SIZE*size) == 0);
 
@@ -1326,21 +1340,21 @@ void test_two_disk_fail_dbg()
 
 int                                    main                                    ()
 {
-	// test0();
-    // test_read();
-    // test_read_error();
-    // test1 ();
-    // test2 ();
-    // test_multi_write();
-    // test3();
-    // test4_1();
-	// test4();
-    // test5();
-	// test_resync();
-    // test_resync_whole();
-    // test_offline_replace();
+	test0();
+    test_read();
+    test_read_error();
+    test1 ();
+    test2 ();
+    test_multi_write();
+    test3();
+    test4_1();
+	test4();
+    test5();
+	test_resync();
+    test_resync_whole();
+    test_offline_replace();
 	test_two_disk_fail();
-	// test_two_disk_fail_dbg();
+	test_two_disk_fail_dbg();
 	return EXIT_SUCCESS;
 }
 
